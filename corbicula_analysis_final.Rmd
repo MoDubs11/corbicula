@@ -1,0 +1,232 @@
+---
+title: "Corbicula Analysis"
+author: "Maureen Anne Williams"
+output: html_document
+---
+Set up R, load packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("chillR")
+library("tidyverse")
+library("openxlsx")
+library(dplyr)
+library(plyr)
+```
+
+Input data from baseline. Clean names & variable types
+```{r}
+##Input data in long format, one singular column
+temp_long<-read.csv("data/tempdata_long.csv", header=T, stringsAsFactors = F)
+##Input data in horizontal format 
+temp_horiz<-read.csv("data/tempdata_horiz.csv", header=T, stringsAsFactors = F)
+str(temp_horiz)
+#Input flows data
+flows<-read.csv("data/flows.csv", header=T, stringsAsFactors = F)
+temp_horiz$dt <- as.Date(temp_horiz$date_time,"%m /%d /%y") 
+flows$dt <- as.Date(flows$Date,"%m /%d /%y")
+```
+
+Temperature Differential calculations
+```{r}
+#Differential Calculations
+temp_horiz$LB_diff_H2<-temp_horiz$LB_T6HOT-((temp_horiz$LB_T6C+temp_horiz$LB_T1)/2)#Laneborough differential
+temp_horiz$LB_diff_H3<-temp_horiz$LB_T3-((temp_horiz$LB_T6C+temp_horiz$LB_T1)/2)#Laneborough differential
+temp_horiz$SB_diff<-temp_horiz$SB_S2-((temp_horiz$SB_S4+temp_horiz$SB_S1+temp_horiz$SB_S3)/3) #Shannonbridge differential
+temp_horiz$LB_diff_H2[temp_horiz$LB_diff_H2 < 0] <- 0 #Negative values are NA
+temp_horiz$LB_diff_H3[temp_horiz$LB_diff_H3 < 0] <- 0 #Negative values are NA
+temp_horiz$SB_diff[temp_horiz$SB_diff < 0] <- 0 #Negative values are NA
+```
+
+Summarize datasets by day for temperature and differential temperature, filter new dataset discounting the downtime at the plant at Lanesborough (Between Sept. 7 & Nov. 21., 2017), generate helpful information for the paper (when do flows reverse, time above 28 degrees)
+```{r}
+byday_differential_summary <- ddply(temp_horiz, c("dt"), summarise,
+                       LB2N    = length(LB_diff_H2),
+                       LB3N    = length(LB_diff_H3),
+                       SBN    = length(SB_diff),
+                       LB2mean = mean(LB_diff_H2),
+                       LB2max  = max(LB_diff_H2),
+                       LB2min  = min(LB_diff_H2),
+                       LB3mean = mean(LB_diff_H3),
+                       LB3max  = max(LB_diff_H3),
+                       LB3min  = min(LB_diff_H3),
+                       SBmean = mean(SB_diff),
+                       SBmax  = max(SB_diff),
+                       SBmin  = min(SB_diff))
+
+byday_summary <- ddply(temp_long, c("mm", "dd", "year", "transect_id", "site", "mmddyy"), summarise,
+                       N    = length(temp),
+                       mean = mean(temp,na.rm=T),
+                       max  = max(temp,na.rm=T),
+                       min  = min(temp,na.rm=T),
+                       DDGrow= ((max+min)/2)-10,
+                       DDLarv= ((max+min)/2)-15,
+                       sd   = sd(temp,na.rm=T),
+                       se   = sd / sqrt(N))
+
+#date and time in useable formats
+byday_summary$dt<-paste(byday_summary$mm, byday_summary$dd, byday_summary$year, sep = "/", collapse = NULL)
+byday_summary$dt1 <- as.Date(byday_summary$dt, "%m /%d /%Y") 
+
+#Generate dataframe without the "downtime" window
+avdiff<-temp_horiz %>%
+filter(dt <= as.Date("2017-09-07") | dt >= as.Date("2017-11-21")) 
+
+#Daily summary of temperatures
+byday_summary <- ddply(temp_long, c("mm", "dd", "year", "transect_id", "site", "mmddyy"), summarise,
+                       N    = length(temp),
+                       mean = mean(temp,na.rm=T),
+                       max  = max(temp,na.rm=T),
+                       min  = min(temp,na.rm=T),
+                       DDGrow= ((max+min)/2)-10, #degree days for growth optimum
+                       DDLarv= ((max+min)/2)-15, #degree days for larval release
+                       sd   = sd(temp,na.rm=T),
+                       se   = sd / sqrt(N))
+byday_summary$DDGrow[byday_summary$DDGrow < 0] <-0 #remove negative degree days
+byday_summary$DDLarv[byday_summary$DDLarv < 0] <-0 #remove negative degree days
+byday_summary$growth1[byday_summary$mean >= 10 & byday_summary$mean <= 35] <- "1"
+byday_summary$growth1[is.na(byday_summary$growth1)] <- 0
+byday_summary$larvae1[byday_summary$mean >= 15 & byday_summary$mean <= 28] <- "1"
+byday_summary$larvae1[is.na(byday_summary$larvae1)] <- 0
+byday_summary$growth1<-as.numeric(byday_summary$growth1) #make numeric, not char
+byday_summary$larvae1<-as.numeric(byday_summary$larvae1) #make numeric, not char
+
+#Flow at which LH3 changes to cold from hot
+LH3diff_low<-byday_differential_summary %>%
+  filter(dt <= as.Date("2017-09-07") | dt >= as.Date("2017-11-21")) %>%
+    filter(LB3mean <= 0.5) 
+merged_flows <- merge(LH3diff_low, flows, by.y = "Date", by.x = "dt", all.x = TRUE)
+write.csv(merged_flows, file = "flows_merged.csv")
+
+#Time above 28 degrees
+temp_long$toohot[temp_long$temp >= 28] <- "1"
+temp_long$toohot[is.na(temp_long$toohot)] <- 0
+toohot_summary<- ddply(temp_long, c("transect_id"), summarise,
+                       N    = length(toohot),#number of 10 minute intervals
+                       toohotsum = sum(toohot=="1",na.rm=T), #number of larvae intervals
+                       non = sum(toohot=="0"),#number of no larvae intervals
+                       propoftime   = (toohotsum / N))
+
+```
+
+Summary stats for data section of the paper, generate Table 1
+```{r}
+#Summary stats for results section
+mean(avdiff$LB_diff_H3, na.rm=T)
+mean(avdiff$LB_diff_H2, na.rm=T)
+max(avdiff$LB_diff_H3, na.rm=T)
+max(avdiff$LB_diff_H2, na.rm=T)
+mean(temp_horiz$SB_diff, na.rm=T)
+sd(avdiff$LB_diff_H3, na.rm=T)
+sd(avdiff$LB_diff_H2, na.rm=T)
+sd(temp_horiz$SB_diff, na.rm=T)
+sd(avdiff$LB_diff_H3, na.rm=T)/(sqrt(length(na.omit(avdiff$LB_diff_H3)))) 
+sd(avdiff$LB_diff_H2, na.rm=T)/(sqrt(length(na.omit(avdiff$LB_diff_H2)))) 
+sd(temp_horiz$SB_diff, na.rm=T)/(sqrt(length(na.omit(temp_horiz$SB_diff)))) 
+
+#Generate table 1 stats for Lanesborough
+#date and time in useable formats
+byday_summary$dt<-paste(byday_summary$mm, byday_summary$dd, byday_summary$year, sep = "/", collapse = NULL)
+byday_summary$dt1 <- as.Date(byday_summary$dt, "%m /%d /%Y") 
+table1_paper_LB<-byday_summary %>%
+filter(site == "LB") %>% #Filter out LB only
+filter(dt1 < as.Date("2017-09-07") | dt1 > as.Date("2017-11-29")) %>% #Filter for downtime
+ddply(c("transect_id"), summarise,
+      N    = length(mean),
+      cum_gdd = sum(DDGrow),
+      cum_ldd = sum(DDLarv),
+      growday = sum(growth1),
+      larvday = sum(larvae1))
+#Generate table 1 stats for SB
+table1_paper_SB <- byday_summary %>%
+  filter(site == "SB") %>% #Filter out LB only
+  ddply(c("transect_id"), summarise,
+                      N    = length(mean),
+                      cum_gdd = sum(DDGrow),
+                      cum_ldd = sum(DDLarv),
+                      growday = sum(growth1),
+                      larvday = sum(larvae1))
+```
+
+
+Begin plotting! Using colorblind friendly shades. 
+```{r}
+lanespalette <- c("#56B4E9","#F0E442", "#009E73", "#D55E00") #BASED ON CBP
+shanbripalette<-c("#999999", "#D55E00", "#56B4E9", "#009E73") #BASED ON CBP
+
+LanesTemp<-byday_summary %>%
+  filter(site == "LB") %>% #filters single site
+  ggplot(aes(x=dt1)) + #generate overall plot
+  geom_point(aes(y=mean, colour = factor(transect_id))) + #add lines
+  coord_cartesian(ylim=c(0,30))+ #adjust y axis
+  scale_x_date(date_breaks = "1 month",date_labels = "%b")+
+  guides(colour = guide_legend(override.aes = list(size=3)))+ #make lines in legend thicker
+  scale_colour_manual(values=lanespalette, breaks=c("LB_T6C","LB_T1", "LB_T6H","LB_T3"), labels=c("LA2","LA3", "LH2","LH3"))+
+  theme(axis.text=element_text(size=14, colour="black"),
+        axis.title=element_text(size=14, colour="black"),
+        legend.title=element_text(size=14),
+        legend.text=element_text(size=12),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"))+ #center overall title
+  labs(x="", y="Mean daily temperature (°C)", title="Lanesborough", colour="Stations") #labels
+
+ShannonTemp<-byday_summary %>%
+  filter(site == "SB") %>%
+  ggplot(aes(x=dt1)) + #generate overall plot
+  geom_point(aes(y=mean, colour = factor(transect_id))) + #add lines
+  coord_cartesian(ylim=c(0,30))+ #adjust y axis
+  scale_x_date(date_breaks = "1 month",date_labels = "%b", limits = as.Date(c("2017-06-01","2018-04-01")))+
+  guides(colour = guide_legend(override.aes = list(size=3)))+ #make lines in legend thicker
+  scale_colour_manual(values=shanbripalette, breaks=c("SB_S4","SB_S3", "SB_S1","SB_S2"), labels=c("SA1","SA2", "SA3","SH3"))+
+  theme(axis.text=element_text(size=14, colour="black"),
+        axis.title=element_text(size=14, colour="black"),
+        legend.title=element_text(size=14),
+        legend.text=element_text(size=12),
+        plot.title = element_text(hjust = 0.5),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"))+ #center overall title
+  labs(x="", y="", colour="Stations", title="Shannonbridge") #labels
+
+
+differential<-ggplot(byday_differential_summary, aes(x=dt)) + #generate overall plot
+  geom_point(aes(y=SBmean, col="Shannonbridge")) +  #add line for T1
+  geom_point(aes(y=LB2mean, col="Lanesborough H2")) + #add line for T3 Top
+  geom_point(aes(y=LB3mean, col="Lanesborough H3")) + #add line for T3 Top
+  coord_cartesian(ylim=c(0,20))+ #adjust y axis
+  scale_x_date(date_breaks = "1 month",date_labels = "%b", limits = as.Date(c("2017-06-01","2018-04-01")))+
+    guides(colour = guide_legend(override.aes = list(size=3)))+ #make lines in legend thicker
+  theme(axis.text=element_text(size=14, colour="black"),
+        axis.title=element_text(size=14, colour="black"),
+        legend.title=element_text(size=14),
+        legend.text=element_text(size=12),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"))+ #center overall title
+  labs(title="",  
+       x="", y="Differential temperature (°C)", colour="Location") #labels
+
+
+library(cowplot)
+top_row<-plot_grid(LanesTemp,
+                   ShannonTemp,
+                   align = 'vh',
+                   labels = c("a", "b"),
+                   hjust = -1,
+                   nrow = 1
+)
+
+final<-plot_grid(top_row,
+                 differential + theme(legend.position="right"),
+                 labels = c("", "c"),
+                 hjust = -1,
+                 nrow = 2
+)
+
+final
+
+```
+
+
+
