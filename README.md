@@ -1,7 +1,7 @@
-# corbicula
+# Corbicula
 Corbicula temperature analysis with Marcin
 
-Analysis for temperasture component of the paper "Thermal effluents from power plants boost performance of the invasive clam Corbicula fluminea in Ireland's largest river" with Marcin Penk and Maureen Williams
+Analysis for temperature component of the paper "Thermal effluents from power plants boost performance of the invasive clam Corbicula fluminea in Ireland's largest river" with Marcin Penk and Maureen Williams
 Located here: https://www.sciencedirect.com/science/article/pii/S0048969719334643
 
 Data were generated using ONSET HOBO loggers. Flow data from the Office of Public Works Water Levels website (http://waterlevel.ie/)
